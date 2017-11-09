@@ -113,13 +113,7 @@ static void tunnel_id_to_vni(__be64 tun_id, __u8 *vni)
 
 static bool eq_tun_id_and_vni(u8 *tun_id, u8 *vni)
 {
-#ifdef __BIG_ENDIAN
-	return (vni[0] == tun_id[2]) &&
-	       (vni[1] == tun_id[1]) &&
-	       (vni[2] == tun_id[0]);
-#else
 	return !memcmp(vni, &tun_id[5], 3);
-#endif
 }
 
 static sa_family_t geneve_get_sk_family(struct geneve_sock *gs)
@@ -1140,24 +1134,11 @@ static struct geneve_dev *geneve_find_dev(struct geneve_net *gn,
 	return t;
 }
 
-static bool is_all_zero(const u8 *fp, size_t size)
-{
-	int i;
-
-	for (i = 0; i < size; i++)
-		if (fp[i])
-			return false;
-	return true;
-}
-
 static bool is_tnl_info_zero(const struct ip_tunnel_info *info)
 {
-	if (info->key.tun_id || info->key.tun_flags || info->key.tos ||
-	    info->key.ttl || info->key.label || info->key.tp_src ||
-	    !is_all_zero((const u8 *)&info->key.u, sizeof(info->key.u)))
-		return false;
-	else
-		return true;
+	return !(info->key.tun_id || info->key.tun_flags || info->key.tos ||
+		 info->key.ttl || info->key.label || info->key.tp_src ||
+		 memchr_inv(&info->key.u, 0, sizeof(info->key.u)));
 }
 
 static bool geneve_dst_addr_equal(struct ip_tunnel_info *a,

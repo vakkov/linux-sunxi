@@ -271,7 +271,7 @@ static void del_nbp(struct net_bridge_port *p)
 	br_stp_disable_port(p);
 	spin_unlock_bh(&br->lock);
 
-	br_ifinfo_notify(RTM_DELLINK, p);
+	br_ifinfo_notify(RTM_DELLINK, NULL, p);
 
 	list_del_rcu(&p->list);
 	if (netdev_get_fwd_headroom(dev) == br->dev->needed_headroom)
@@ -309,6 +309,8 @@ void br_dev_delete(struct net_device *dev, struct list_head *head)
 	list_for_each_entry_safe(p, n, &br->port_list, list) {
 		del_nbp(p);
 	}
+
+	br_recalculate_neigh_suppress_enabled(br);
 
 	br_fdb_delete_by_port(br, NULL, 0, 1);
 
@@ -587,7 +589,7 @@ int br_add_if(struct net_bridge *br, struct net_device *dev,
 		br_stp_enable_port(p);
 	spin_unlock_bh(&br->lock);
 
-	br_ifinfo_notify(RTM_NEWLINK, p);
+	br_ifinfo_notify(RTM_NEWLINK, NULL, p);
 
 	if (changed_addr)
 		call_netdevice_notifiers(NETDEV_CHANGEADDR, br->dev);
@@ -660,4 +662,7 @@ void br_port_flags_change(struct net_bridge_port *p, unsigned long mask)
 
 	if (mask & BR_AUTO_MASK)
 		nbp_update_port_count(br);
+
+	if (mask & BR_NEIGH_SUPPRESS)
+		br_recalculate_neigh_suppress_enabled(br);
 }

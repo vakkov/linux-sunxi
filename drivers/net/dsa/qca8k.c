@@ -536,7 +536,7 @@ qca8k_setup(struct dsa_switch *ds)
 
 	/* Disable MAC by default on all user ports */
 	for (i = 1; i < QCA8K_NUM_PORTS; i++)
-		if (ds->enabled_port_mask & BIT(i))
+		if (dsa_is_user_port(ds, i))
 			qca8k_port_set_status(priv, i, 0);
 
 	/* Forward all unknown frames to CPU port for Linux processing */
@@ -551,12 +551,11 @@ qca8k_setup(struct dsa_switch *ds)
 		/* CPU port gets connected to all user ports of the switch */
 		if (dsa_is_cpu_port(ds, i)) {
 			qca8k_rmw(priv, QCA8K_PORT_LOOKUP_CTRL(QCA8K_CPU_PORT),
-				  QCA8K_PORT_LOOKUP_MEMBER,
-				  ds->enabled_port_mask);
+				  QCA8K_PORT_LOOKUP_MEMBER, dsa_user_ports(ds));
 		}
 
 		/* Invividual user ports get connected to CPU port only */
-		if (ds->enabled_port_mask & BIT(i)) {
+		if (dsa_is_user_port(ds, i)) {
 			int shift = 16 * (i % 2);
 
 			qca8k_rmw(priv, QCA8K_PORT_LOOKUP_CTRL(i),
@@ -700,7 +699,7 @@ qca8k_port_bridge_join(struct dsa_switch *ds, int port, struct net_device *br)
 	int i;
 
 	for (i = 1; i < QCA8K_NUM_PORTS; i++) {
-		if (ds->ports[i].bridge_dev != br)
+		if (dsa_to_port(ds, i)->bridge_dev != br)
 			continue;
 		/* Add this port to the portvlan mask of the other ports
 		 * in the bridge
@@ -725,7 +724,7 @@ qca8k_port_bridge_leave(struct dsa_switch *ds, int port, struct net_device *br)
 	int i;
 
 	for (i = 1; i < QCA8K_NUM_PORTS; i++) {
-		if (ds->ports[i].bridge_dev != br)
+		if (dsa_to_port(ds, i)->bridge_dev != br)
 			continue;
 		/* Remove this port to the portvlan mask of the other ports
 		 * in the bridge

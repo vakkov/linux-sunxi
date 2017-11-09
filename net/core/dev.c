@@ -1149,9 +1149,8 @@ static int dev_alloc_name_ns(struct net *net,
 	return ret;
 }
 
-static int dev_get_valid_name(struct net *net,
-			      struct net_device *dev,
-			      const char *name)
+int dev_get_valid_name(struct net *net, struct net_device *dev,
+		       const char *name)
 {
 	BUG_ON(!net);
 
@@ -1167,6 +1166,7 @@ static int dev_get_valid_name(struct net *net,
 
 	return 0;
 }
+EXPORT_SYMBOL(dev_get_valid_name);
 
 /**
  *	dev_change_name - change name of a device
@@ -2040,6 +2040,7 @@ int netdev_txq_to_tc(struct net_device *dev, unsigned int txq)
 
 	return 0;
 }
+EXPORT_SYMBOL(netdev_txq_to_tc);
 
 #ifdef CONFIG_XPS
 static DEFINE_MUTEX(xps_map_mutex);
@@ -3273,22 +3274,22 @@ EXPORT_SYMBOL(dev_loopback_xmit);
 static struct sk_buff *
 sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 {
-	struct tcf_proto *cl = rcu_dereference_bh(dev->egress_cl_list);
+	struct mini_Qdisc *miniq = rcu_dereference_bh(dev->miniq_egress);
 	struct tcf_result cl_res;
 
-	if (!cl)
+	if (!miniq)
 		return skb;
 
 	/* qdisc_skb_cb(skb)->pkt_len was already set by the caller. */
-	qdisc_bstats_cpu_update(cl->q, skb);
+	mini_qdisc_bstats_cpu_update(miniq, skb);
 
-	switch (tcf_classify(skb, cl, &cl_res, false)) {
+	switch (tcf_classify(skb, miniq->filter_list, &cl_res, false)) {
 	case TC_ACT_OK:
 	case TC_ACT_RECLASSIFY:
 		skb->tc_index = TC_H_MIN(cl_res.classid);
 		break;
 	case TC_ACT_SHOT:
-		qdisc_qstats_cpu_drop(cl->q);
+		mini_qdisc_qstats_cpu_drop(miniq);
 		*ret = NET_XMIT_DROP;
 		kfree_skb(skb);
 		return NULL;
@@ -4188,7 +4189,7 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		   struct net_device *orig_dev)
 {
 #ifdef CONFIG_NET_CLS_ACT
-	struct tcf_proto *cl = rcu_dereference_bh(skb->dev->ingress_cl_list);
+	struct mini_Qdisc *miniq = rcu_dereference_bh(skb->dev->miniq_ingress);
 	struct tcf_result cl_res;
 
 	/* If there's at least one ingress present somewhere (so
@@ -4196,8 +4197,9 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 	 * that are not configured with an ingress qdisc will bail
 	 * out here.
 	 */
-	if (!cl)
+	if (!miniq)
 		return skb;
+
 	if (*pt_prev) {
 		*ret = deliver_skb(skb, *pt_prev, orig_dev);
 		*pt_prev = NULL;
@@ -4205,15 +4207,15 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 
 	qdisc_skb_cb(skb)->pkt_len = skb->len;
 	skb->tc_at_ingress = 1;
-	qdisc_bstats_cpu_update(cl->q, skb);
+	mini_qdisc_bstats_cpu_update(miniq, skb);
 
-	switch (tcf_classify(skb, cl, &cl_res, false)) {
+	switch (tcf_classify(skb, miniq->filter_list, &cl_res, false)) {
 	case TC_ACT_OK:
 	case TC_ACT_RECLASSIFY:
 		skb->tc_index = TC_H_MIN(cl_res.classid);
 		break;
 	case TC_ACT_SHOT:
-		qdisc_qstats_cpu_drop(cl->q);
+		mini_qdisc_qstats_cpu_drop(miniq);
 		kfree_skb(skb);
 		return NULL;
 	case TC_ACT_STOLEN:
@@ -4491,6 +4493,33 @@ out:
 	return ret;
 }
 
+/**
+ *	netif_receive_skb_core - special purpose version of netif_receive_skb
+ *	@skb: buffer to process
+ *
+ *	More direct receive version of netif_receive_skb().  It should
+ *	only be used by callers that have a need to skip RPS and Generic XDP.
+ *	Caller must also take care of handling if (page_is_)pfmemalloc.
+ *
+ *	This function may only be called from softirq context and interrupts
+ *	should be enabled.
+ *
+ *	Return values (usually ignored):
+ *	NET_RX_SUCCESS: no congestion
+ *	NET_RX_DROP: packet was dropped
+ */
+int netif_receive_skb_core(struct sk_buff *skb)
+{
+	int ret;
+
+	rcu_read_lock();
+	ret = __netif_receive_skb_core(skb, false);
+	rcu_read_unlock();
+
+	return ret;
+}
+EXPORT_SYMBOL(netif_receive_skb_core);
+
 static int __netif_receive_skb(struct sk_buff *skb)
 {
 	int ret;
@@ -4516,7 +4545,7 @@ static int __netif_receive_skb(struct sk_buff *skb)
 	return ret;
 }
 
-static int generic_xdp_install(struct net_device *dev, struct netdev_xdp *xdp)
+static int generic_xdp_install(struct net_device *dev, struct netdev_bpf *xdp)
 {
 	struct bpf_prog *old = rtnl_dereference(dev->xdp_prog);
 	struct bpf_prog *new = xdp->prog;
@@ -7061,26 +7090,26 @@ int dev_change_proto_down(struct net_device *dev, bool proto_down)
 }
 EXPORT_SYMBOL(dev_change_proto_down);
 
-u8 __dev_xdp_attached(struct net_device *dev, xdp_op_t xdp_op, u32 *prog_id)
+u8 __dev_xdp_attached(struct net_device *dev, bpf_op_t bpf_op, u32 *prog_id)
 {
-	struct netdev_xdp xdp;
+	struct netdev_bpf xdp;
 
 	memset(&xdp, 0, sizeof(xdp));
 	xdp.command = XDP_QUERY_PROG;
 
 	/* Query must always succeed. */
-	WARN_ON(xdp_op(dev, &xdp) < 0);
+	WARN_ON(bpf_op(dev, &xdp) < 0);
 	if (prog_id)
 		*prog_id = xdp.prog_id;
 
 	return xdp.prog_attached;
 }
 
-static int dev_xdp_install(struct net_device *dev, xdp_op_t xdp_op,
+static int dev_xdp_install(struct net_device *dev, bpf_op_t bpf_op,
 			   struct netlink_ext_ack *extack, u32 flags,
 			   struct bpf_prog *prog)
 {
-	struct netdev_xdp xdp;
+	struct netdev_bpf xdp;
 
 	memset(&xdp, 0, sizeof(xdp));
 	if (flags & XDP_FLAGS_HW_MODE)
@@ -7091,7 +7120,7 @@ static int dev_xdp_install(struct net_device *dev, xdp_op_t xdp_op,
 	xdp.flags = flags;
 	xdp.prog = prog;
 
-	return xdp_op(dev, &xdp);
+	return bpf_op(dev, &xdp);
 }
 
 /**
@@ -7108,32 +7137,36 @@ int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
 {
 	const struct net_device_ops *ops = dev->netdev_ops;
 	struct bpf_prog *prog = NULL;
-	xdp_op_t xdp_op, xdp_chk;
+	bpf_op_t bpf_op, bpf_chk;
 	int err;
 
 	ASSERT_RTNL();
 
-	xdp_op = xdp_chk = ops->ndo_xdp;
-	if (!xdp_op && (flags & (XDP_FLAGS_DRV_MODE | XDP_FLAGS_HW_MODE)))
+	bpf_op = bpf_chk = ops->ndo_bpf;
+	if (!bpf_op && (flags & (XDP_FLAGS_DRV_MODE | XDP_FLAGS_HW_MODE)))
 		return -EOPNOTSUPP;
-	if (!xdp_op || (flags & XDP_FLAGS_SKB_MODE))
-		xdp_op = generic_xdp_install;
-	if (xdp_op == xdp_chk)
-		xdp_chk = generic_xdp_install;
+	if (!bpf_op || (flags & XDP_FLAGS_SKB_MODE))
+		bpf_op = generic_xdp_install;
+	if (bpf_op == bpf_chk)
+		bpf_chk = generic_xdp_install;
 
 	if (fd >= 0) {
-		if (xdp_chk && __dev_xdp_attached(dev, xdp_chk, NULL))
+		if (bpf_chk && __dev_xdp_attached(dev, bpf_chk, NULL))
 			return -EEXIST;
 		if ((flags & XDP_FLAGS_UPDATE_IF_NOEXIST) &&
-		    __dev_xdp_attached(dev, xdp_op, NULL))
+		    __dev_xdp_attached(dev, bpf_op, NULL))
 			return -EBUSY;
 
-		prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_XDP);
+		if (bpf_op == ops->ndo_bpf)
+			prog = bpf_prog_get_type_dev(fd, BPF_PROG_TYPE_XDP,
+						     dev);
+		else
+			prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_XDP);
 		if (IS_ERR(prog))
 			return PTR_ERR(prog);
 	}
 
-	err = dev_xdp_install(dev, xdp_op, extack, flags, prog);
+	err = dev_xdp_install(dev, bpf_op, extack, flags, prog);
 	if (err < 0 && prog)
 		bpf_prog_put(prog);
 

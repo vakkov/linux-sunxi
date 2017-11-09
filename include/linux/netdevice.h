@@ -770,17 +770,20 @@ typedef u16 (*select_queue_fallback_t)(struct net_device *dev,
 				       struct sk_buff *skb);
 
 enum tc_setup_type {
-	TC_SETUP_MQPRIO,
+	TC_SETUP_QDISC_MQPRIO,
 	TC_SETUP_CLSU32,
 	TC_SETUP_CLSFLOWER,
 	TC_SETUP_CLSMATCHALL,
 	TC_SETUP_CLSBPF,
+	TC_SETUP_BLOCK,
+	TC_SETUP_QDISC_CBS,
+	TC_SETUP_QDISC_RED,
 };
 
-/* These structures hold the attributes of xdp state that are being passed
- * to the netdevice through the xdp op.
+/* These structures hold the attributes of bpf state that are being passed
+ * to the netdevice through the bpf op.
  */
-enum xdp_netdev_command {
+enum bpf_netdev_command {
 	/* Set or clear a bpf program used in the earliest stages of packet
 	 * rx. The prog will have been loaded as BPF_PROG_TYPE_XDP. The callee
 	 * is responsible for calling bpf_prog_put on any old progs that are
@@ -795,12 +798,17 @@ enum xdp_netdev_command {
 	 * is equivalent to XDP_ATTACHED_DRV.
 	 */
 	XDP_QUERY_PROG,
+	/* BPF program for offload callbacks, invoked at program load time. */
+	BPF_OFFLOAD_VERIFIER_PREP,
+	BPF_OFFLOAD_TRANSLATE,
+	BPF_OFFLOAD_DESTROY,
 };
 
+struct bpf_ext_analyzer_ops;
 struct netlink_ext_ack;
 
-struct netdev_xdp {
-	enum xdp_netdev_command command;
+struct netdev_bpf {
+	enum bpf_netdev_command command;
 	union {
 		/* XDP_SETUP_PROG */
 		struct {
@@ -813,6 +821,15 @@ struct netdev_xdp {
 			u8 prog_attached;
 			u32 prog_id;
 		};
+		/* BPF_OFFLOAD_VERIFIER_PREP */
+		struct {
+			struct bpf_prog *prog;
+			const struct bpf_ext_analyzer_ops *ops; /* callee set */
+		} verifier;
+		/* BPF_OFFLOAD_TRANSLATE, BPF_OFFLOAD_DESTROY */
+		struct {
+			struct bpf_prog *prog;
+		} offload;
 	};
 };
 
@@ -1122,9 +1139,10 @@ struct dev_ifalias {
  *	appropriate rx headroom value allows avoiding skb head copy on
  *	forward. Setting a negative value resets the rx headroom to the
  *	default value.
- * int (*ndo_xdp)(struct net_device *dev, struct netdev_xdp *xdp);
+ * int (*ndo_bpf)(struct net_device *dev, struct netdev_bpf *bpf);
  *	This function is used to set or query state related to XDP on the
- *	netdevice. See definition of enum xdp_netdev_command for details.
+ *	netdevice and manage BPF offload. See definition of
+ *	enum bpf_netdev_command for details.
  * int (*ndo_xdp_xmit)(struct net_device *dev, struct xdp_buff *xdp);
  *	This function is used to submit a XDP packet for transmit on a
  *	netdevice.
@@ -1313,8 +1331,8 @@ struct net_device_ops {
 						       struct sk_buff *skb);
 	void			(*ndo_set_rx_headroom)(struct net_device *dev,
 						       int needed_headroom);
-	int			(*ndo_xdp)(struct net_device *dev,
-					   struct netdev_xdp *xdp);
+	int			(*ndo_bpf)(struct net_device *dev,
+					   struct netdev_bpf *bpf);
 	int			(*ndo_xdp_xmit)(struct net_device *dev,
 						struct xdp_buff *xdp);
 	void			(*ndo_xdp_flush)(struct net_device *dev);
@@ -1557,6 +1575,8 @@ enum netdev_priv_flags {
  *
  *	@rx_handler:		handler for received packets
  *	@rx_handler_data: 	XXX: need comments on this one
+ *	@miniq_ingress:		ingress/clsact qdisc specific data for
+ *				ingress processing
  *	@ingress_queue:		XXX: need comments on this one
  *	@broadcast:		hw bcast address
  *
@@ -1574,7 +1594,8 @@ enum netdev_priv_flags {
  *	@tx_global_lock: 	XXX: need comments on this one
  *
  *	@xps_maps:	XXX: need comments on this one
- *
+ *	@miniq_egress:		clsact qdisc specific data for
+ *				egress processing
  *	@watchdog_timeo:	Represents the timeout that is used by
  *				the watchdog (see dev_watchdog())
  *	@watchdog_timer:	List of timers
@@ -1793,7 +1814,7 @@ struct net_device {
 	void __rcu		*rx_handler_data;
 
 #ifdef CONFIG_NET_CLS_ACT
-	struct tcf_proto __rcu  *ingress_cl_list;
+	struct mini_Qdisc __rcu	*miniq_ingress;
 #endif
 	struct netdev_queue __rcu *ingress_queue;
 #ifdef CONFIG_NETFILTER_INGRESS
@@ -1824,7 +1845,7 @@ struct net_device {
 	struct xps_dev_maps __rcu *xps_maps;
 #endif
 #ifdef CONFIG_NET_CLS_ACT
-	struct tcf_proto __rcu  *egress_cl_list;
+	struct mini_Qdisc __rcu	*miniq_egress;
 #endif
 
 	/* These may be needed for future network-power-down code. */
@@ -3260,6 +3281,7 @@ int do_xdp_generic(struct bpf_prog *xdp_prog, struct sk_buff *skb);
 int netif_rx(struct sk_buff *skb);
 int netif_rx_ni(struct sk_buff *skb);
 int netif_receive_skb(struct sk_buff *skb);
+int netif_receive_skb_core(struct sk_buff *skb);
 gro_result_t napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb);
 void napi_gro_flush(struct napi_struct *napi, bool flush_old);
 struct sk_buff *napi_get_frags(struct napi_struct *napi);
@@ -3305,10 +3327,10 @@ struct sk_buff *validate_xmit_skb_list(struct sk_buff *skb, struct net_device *d
 struct sk_buff *dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 				    struct netdev_queue *txq, int *ret);
 
-typedef int (*xdp_op_t)(struct net_device *dev, struct netdev_xdp *xdp);
+typedef int (*bpf_op_t)(struct net_device *dev, struct netdev_bpf *bpf);
 int dev_change_xdp_fd(struct net_device *dev, struct netlink_ext_ack *extack,
 		      int fd, u32 flags);
-u8 __dev_xdp_attached(struct net_device *dev, xdp_op_t xdp_op, u32 *prog_id);
+u8 __dev_xdp_attached(struct net_device *dev, bpf_op_t xdp_op, u32 *prog_id);
 
 int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
 int dev_forward_skb(struct net_device *dev, struct sk_buff *skb);
@@ -3709,6 +3731,9 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 				    unsigned char name_assign_type,
 				    void (*setup)(struct net_device *),
 				    unsigned int txqs, unsigned int rxqs);
+int dev_get_valid_name(struct net *net, struct net_device *dev,
+		       const char *name);
+
 #define alloc_netdev(sizeof_priv, name, name_assign_type, setup) \
 	alloc_netdev_mqs(sizeof_priv, name, name_assign_type, setup, 1, 1)
 

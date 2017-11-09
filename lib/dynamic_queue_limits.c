@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Dynamic byte queue limits.  See include/linux/dynamic_queue_limits.h
  *
@@ -127,12 +128,11 @@ void dql_reset(struct dql *dql)
 }
 EXPORT_SYMBOL(dql_reset);
 
-int dql_init(struct dql *dql, unsigned hold_time)
+void dql_init(struct dql *dql, unsigned int hold_time)
 {
 	dql->max_limit = DQL_MAX_LIMIT;
 	dql->min_limit = 0;
 	dql->slack_hold_time = hold_time;
 	dql_reset(dql);
-	return 0;
 }
 EXPORT_SYMBOL(dql_init);

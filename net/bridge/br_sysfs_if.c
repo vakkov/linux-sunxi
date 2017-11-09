@@ -191,6 +191,7 @@ BRPORT_ATTR_FLAG(proxyarp, BR_PROXYARP);
 BRPORT_ATTR_FLAG(proxyarp_wifi, BR_PROXYARP_WIFI);
 BRPORT_ATTR_FLAG(multicast_flood, BR_MCAST_FLOOD);
 BRPORT_ATTR_FLAG(broadcast_flood, BR_BCAST_FLOOD);
+BRPORT_ATTR_FLAG(neigh_suppress, BR_NEIGH_SUPPRESS);
 
 #ifdef CONFIG_BRIDGE_IGMP_SNOOPING
 static ssize_t show_multicast_router(struct net_bridge_port *p, char *buf)
@@ -241,6 +242,7 @@ static const struct brport_attribute *brport_attrs[] = {
 	&brport_attr_multicast_flood,
 	&brport_attr_broadcast_flood,
 	&brport_attr_group_fwd_mask,
+	&brport_attr_neigh_suppress,
 	NULL
 };
 
@@ -278,7 +280,7 @@ static ssize_t brport_store(struct kobject *kobj,
 			ret = brport_attr->store(p, val);
 			spin_unlock_bh(&p->br->lock);
 			if (!ret) {
-				br_ifinfo_notify(RTM_NEWLINK, p);
+				br_ifinfo_notify(RTM_NEWLINK, NULL, p);
 				ret = count;
 			}
 		}

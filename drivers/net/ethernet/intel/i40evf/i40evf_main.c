@@ -515,6 +515,7 @@ i40evf_request_traffic_irqs(struct i40evf_adapter *adapter, char *basename)
 	unsigned int vector, q_vectors;
 	unsigned int rx_int_idx = 0, tx_int_idx = 0;
 	int irq_num, err;
+	int cpu;
 
 	i40evf_irq_disable(adapter);
 	/* Decrement for Other and TCP Timer vectors */
@@ -553,10 +554,12 @@ i40evf_request_traffic_irqs(struct i40evf_adapter *adapter, char *basename)
 		q_vector->affinity_notify.release =
 						   i40evf_irq_affinity_release;
 		irq_set_affinity_notifier(irq_num, &q_vector->affinity_notify);
-		/* get_cpu_mask returns a static constant mask with
-		 * a permanent lifetime so it's ok to use here.
+		/* Spread the IRQ affinity hints across online CPUs. Note that
+		 * get_cpu_mask returns a mask with a permanent lifetime so
+		 * it's safe to use as a hint for irq_set_affinity_hint.
 		 */
-		irq_set_affinity_hint(irq_num, get_cpu_mask(q_vector->v_idx));
+		cpu = cpumask_local_spread(q_vector->v_idx, -1);
+		irq_set_affinity_hint(irq_num, get_cpu_mask(cpu));
 	}
 
 	return 0;
@@ -877,6 +880,8 @@ i40evf_mac_filter *i40evf_add_filter(struct i40evf_adapter *adapter,
 		list_add_tail(&f->list, &adapter->mac_filter_list);
 		f->add = true;
 		adapter->aq_required |= I40EVF_FLAG_AQ_ADD_MAC_FILTER;
+	} else {
+		f->remove = false;
 	}
 
 	clear_bit(__I40EVF_IN_CRITICAL_TASK, &adapter->crit_section);
@@ -1218,7 +1223,7 @@ static int i40evf_alloc_queues(struct i40evf_adapter *adapter)
 		tx_ring->netdev = adapter->netdev;
 		tx_ring->dev = &adapter->pdev->dev;
 		tx_ring->count = adapter->tx_desc_count;
-		tx_ring->tx_itr_setting = (I40E_ITR_DYNAMIC | I40E_ITR_TX_DEF);
+		tx_ring->tx_itr_setting = I40E_ITR_TX_DEF;
 		if (adapter->flags & I40EVF_FLAG_WB_ON_ITR_CAPABLE)
 			tx_ring->flags |= I40E_TXR_FLAGS_WB_ON_ITR;
 
@@ -1227,7 +1232,7 @@ static int i40evf_alloc_queues(struct i40evf_adapter *adapter)
 		rx_ring->netdev = adapter->netdev;
 		rx_ring->dev = &adapter->pdev->dev;
 		rx_ring->count = adapter->rx_desc_count;
-		rx_ring->rx_itr_setting = (I40E_ITR_DYNAMIC | I40E_ITR_RX_DEF);
+		rx_ring->rx_itr_setting = I40E_ITR_RX_DEF;
 	}
 
 	adapter->num_active_queues = num_active_queues;
@@ -1589,9 +1594,10 @@ err:
  * i40evf_watchdog_timer - Periodic call-back timer
  * @data: pointer to adapter disguised as unsigned long
  **/
-static void i40evf_watchdog_timer(unsigned long data)
+static void i40evf_watchdog_timer(struct timer_list *t)
 {
-	struct i40evf_adapter *adapter = (struct i40evf_adapter *)data;
+	struct i40evf_adapter *adapter = from_timer(adapter, t,
+						    watchdog_timer);
 
 	schedule_work(&adapter->watchdog_task);
 	/* timer will be rescheduled in watchdog task */
@@ -2420,10 +2426,6 @@ out_err:
 	return features & ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
 }
 
-#define I40EVF_VLAN_FEATURES (NETIF_F_HW_VLAN_CTAG_TX |\
-			      NETIF_F_HW_VLAN_CTAG_RX |\
-			      NETIF_F_HW_VLAN_CTAG_FILTER)
-
 /**
  * i40evf_fix_features - fix up the netdev feature bits
  * @netdev: our net device
@@ -2436,9 +2438,11 @@ static netdev_features_t i40evf_fix_features(struct net_device *netdev,
 {
 	struct i40evf_adapter *adapter = netdev_priv(netdev);
 
-	features &= ~I40EVF_VLAN_FEATURES;
-	if (adapter->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN)
-		features |= I40EVF_VLAN_FEATURES;
+	if (!(adapter->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN))
+		features &= ~(NETIF_F_HW_VLAN_CTAG_TX |
+			      NETIF_F_HW_VLAN_CTAG_RX |
+			      NETIF_F_HW_VLAN_CTAG_FILTER);
+
 	return features;
 }
 
@@ -2569,9 +2573,17 @@ int i40evf_process_config(struct i40evf_adapter *adapter)
 	 */
 	hw_features = hw_enc_features;
 
+	/* Enable VLAN features if supported */
+	if (vfres->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN)
+		hw_features |= (NETIF_F_HW_VLAN_CTAG_TX |
+				NETIF_F_HW_VLAN_CTAG_RX);
+
 	netdev->hw_features |= hw_features;
 
-	netdev->features |= hw_features | I40EVF_VLAN_FEATURES;
+	netdev->features |= hw_features;
+
+	if (vfres->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN)
+		netdev->features |= NETIF_F_HW_VLAN_CTAG_FILTER;
 
 	adapter->vsi.id = adapter->vsi_res->vsi_id;
 
@@ -2737,8 +2749,7 @@ static void i40evf_init_task(struct work_struct *work)
 		ether_addr_copy(netdev->perm_addr, adapter->hw.mac.addr);
 	}
 
-	setup_timer(&adapter->watchdog_timer, &i40evf_watchdog_timer,
-		    (unsigned long)adapter);
+	timer_setup(&adapter->watchdog_timer, i40evf_watchdog_timer, 0);
 	mod_timer(&adapter->watchdog_timer, jiffies + 1);
 
 	adapter->tx_desc_count = I40EVF_DEFAULT_TXD;

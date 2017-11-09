@@ -37,6 +37,26 @@ kci_del_dummy()
 	check_err $?
 }
 
+kci_test_netconf()
+{
+	dev="$1"
+	r=$ret
+
+	ip netconf show dev "$dev" > /dev/null
+	check_err $?
+
+	for f in 4 6; do
+		ip -$f netconf show dev "$dev" > /dev/null
+		check_err $?
+	done
+
+	if [ $ret -ne 0 ] ;then
+		echo "FAIL: ip netconf show $dev"
+		test $r -eq 0 && ret=0
+		return 1
+	fi
+}
+
 # add a bridge with vlans on top
 kci_test_bridge()
 {
@@ -63,6 +83,11 @@ kci_test_bridge()
 	check_err $?
 	ip r s t all > /dev/null
 	check_err $?
+
+	for name in "$devbr" "$vlandev" "$devdummy" ; do
+		kci_test_netconf "$name"
+	done
+
 	ip -6 addr del dev "$vlandev" dead:42::1234/64
 	check_err $?
 
@@ -100,6 +125,9 @@ kci_test_gre()
 	check_err $?
 	ip addr > /dev/null
 	check_err $?
+
+	kci_test_netconf "$gredev"
+
 	ip addr del dev "$devdummy" 10.23.7.11/24
 	check_err $?
 
@@ -433,6 +461,47 @@ kci_test_encap()
 	ip netns del "$testns"
 }
 
+kci_test_macsec()
+{
+	msname="test_macsec0"
+	ret=0
+
+	ip macsec help 2>&1 | grep -q "^Usage: ip macsec"
+	if [ $? -ne 0 ]; then
+		echo "SKIP: macsec: iproute2 too old"
+		return 0
+	fi
+
+	ip link add link "$devdummy" "$msname" type macsec port 42 encrypt on
+	check_err $?
+	if [ $ret -ne 0 ];then
+		echo "FAIL: can't add macsec interface, skipping test"
+		return 1
+	fi
+
+	ip macsec add "$msname" tx sa 0 pn 1024 on key 01 12345678901234567890123456789012
+	check_err $?
+
+	ip macsec add "$msname" rx port 1234 address "1c:ed:de:ad:be:ef"
+	check_err $?
+
+	ip macsec add "$msname" rx port 1234 address "1c:ed:de:ad:be:ef" sa 0 pn 1 on key 00 0123456789abcdef0123456789abcdef
+	check_err $?
+
+	ip macsec show > /dev/null
+	check_err $?
+
+	ip link del dev "$msname"
+	check_err $?
+
+	if [ $ret -ne 0 ];then
+		echo "FAIL: macsec"
+		return 1
+	fi
+
+	echo "PASS: macsec"
+}
+
 kci_test_rtnl()
 {
 	kci_add_dummy
@@ -450,6 +519,7 @@ kci_test_rtnl()
 	kci_test_ifalias
 	kci_test_vrf
 	kci_test_encap
+	kci_test_macsec
 
 	kci_del_dummy
 }

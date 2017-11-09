@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/rcupdate.h>
 #include <linux/spinlock.h>
 #include <linux/jiffies.h>
@@ -19,8 +20,6 @@
 #include <net/dst.h>
 #include <net/tcp.h>
 #include <net/genetlink.h>
-
-int sysctl_tcp_nometrics_save __read_mostly;
 
 static struct tcp_metrics_block *__tcp_get_metrics(const struct inetpeer_addr *saddr,
 						   const struct inetpeer_addr *daddr,
@@ -330,7 +329,7 @@ void tcp_update_metrics(struct sock *sk)
 	int m;
 
 	sk_dst_confirm(sk);
-	if (sysctl_tcp_nometrics_save || !dst)
+	if (net->ipv4.sysctl_tcp_nometrics_save || !dst)
 		return;
 
 	rcu_read_lock();

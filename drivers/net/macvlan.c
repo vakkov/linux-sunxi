@@ -413,7 +413,9 @@ static void macvlan_forward_source_one(struct sk_buff *skb,
 
 	len = nskb->len + ETH_HLEN;
 	nskb->dev = dev;
-	nskb->pkt_type = PACKET_HOST;
+
+	if (ether_addr_equal_64bits(eth_hdr(skb)->h_dest, dev->dev_addr))
+		nskb->pkt_type = PACKET_HOST;
 
 	ret = netif_rx(nskb);
 	macvlan_count_rx(vlan, len, ret == NET_RX_SUCCESS, false);
@@ -480,7 +482,7 @@ static rx_handler_result_t macvlan_handle_frame(struct sk_buff **pskb)
 					      struct macvlan_dev, list);
 	else
 		vlan = macvlan_hash_lookup(port, eth->h_dest);
-	if (vlan == NULL)
+	if (!vlan || vlan->mode == MACVLAN_MODE_SOURCE)
 		return RX_HANDLER_PASS;
 
 	dev = vlan->dev;
@@ -596,8 +598,6 @@ static const struct header_ops macvlan_hard_header_ops = {
 	.cache_update	= eth_header_cache_update,
 };
 
-static struct rtnl_link_ops macvlan_link_ops;
-
 static int macvlan_open(struct net_device *dev)
 {
 	struct macvlan_dev *vlan = netdev_priv(dev);
@@ -613,8 +613,7 @@ static int macvlan_open(struct net_device *dev)
 		goto hash_add;
 	}
 
-	if (lowerdev->features & NETIF_F_HW_L2FW_DOFFLOAD &&
-	    dev->rtnl_link_ops == &macvlan_link_ops) {
+	if (lowerdev->features & NETIF_F_HW_L2FW_DOFFLOAD) {
 		vlan->fwd_priv =
 		      lowerdev->netdev_ops->ndo_dfwd_add_station(lowerdev, dev);
 

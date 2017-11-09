@@ -545,6 +545,7 @@ EXPORT_SYMBOL(b53_disable_port);
 
 void b53_brcm_hdr_setup(struct dsa_switch *ds, int port)
 {
+	bool tag_en = !!(ds->ops->get_tag_protocol(ds) == DSA_TAG_PROTO_BRCM);
 	struct b53_device *dev = ds->priv;
 	u8 hdr_ctl, val;
 	u16 reg;
@@ -567,7 +568,10 @@ void b53_brcm_hdr_setup(struct dsa_switch *ds, int port)
 
 	/* Enable Broadcom tags for IMP port */
 	b53_read8(dev, B53_MGMT_PAGE, B53_BRCM_HDR, &hdr_ctl);
-	hdr_ctl |= val;
+	if (tag_en)
+		hdr_ctl |= val;
+	else
+		hdr_ctl &= ~val;
 	b53_write8(dev, B53_MGMT_PAGE, B53_BRCM_HDR, hdr_ctl);
 
 	/* Registers below are only accessible on newer devices */
@@ -578,14 +582,20 @@ void b53_brcm_hdr_setup(struct dsa_switch *ds, int port)
 	 * allow us to tag outgoing frames
 	 */
 	b53_read16(dev, B53_MGMT_PAGE, B53_BRCM_HDR_RX_DIS, &reg);
-	reg &= ~BIT(port);
+	if (tag_en)
+		reg &= ~BIT(port);
+	else
+		reg |= BIT(port);
 	b53_write16(dev, B53_MGMT_PAGE, B53_BRCM_HDR_RX_DIS, reg);
 
 	/* Enable transmission of Broadcom tags from the switch (CPU RX) to
 	 * allow delivering frames to the per-port net_devices
 	 */
 	b53_read16(dev, B53_MGMT_PAGE, B53_BRCM_HDR_TX_DIS, &reg);
-	reg &= ~BIT(port);
+	if (tag_en)
+		reg &= ~BIT(port);
+	else
+		reg |= BIT(port);
 	b53_write16(dev, B53_MGMT_PAGE, B53_BRCM_HDR_TX_DIS, reg);
 }
 EXPORT_SYMBOL(b53_brcm_hdr_setup);
@@ -613,8 +623,9 @@ static void b53_enable_mib(struct b53_device *dev)
 	b53_write8(dev, B53_MGMT_PAGE, B53_GLOBAL_CONFIG, gc);
 }
 
-static int b53_configure_vlan(struct b53_device *dev)
+int b53_configure_vlan(struct dsa_switch *ds)
 {
+	struct b53_device *dev = ds->priv;
 	struct b53_vlan vl = { 0 };
 	int i;
 
@@ -637,6 +648,7 @@ static int b53_configure_vlan(struct b53_device *dev)
 
 	return 0;
 }
+EXPORT_SYMBOL(b53_configure_vlan);
 
 static void b53_switch_reset_gpio(struct b53_device *dev)
 {
@@ -751,7 +763,7 @@ static int b53_apply_config(struct b53_device *priv)
 	/* disable switching */
 	b53_set_forwarding(priv, 0);
 
-	b53_configure_vlan(priv);
+	b53_configure_vlan(priv->ds);
 
 	/* enable switching */
 	b53_set_forwarding(priv, 1);
@@ -873,7 +885,7 @@ static int b53_setup(struct dsa_switch *ds)
 	for (port = 0; port < dev->num_ports; port++) {
 		if (dsa_is_cpu_port(ds, port))
 			b53_enable_cpu_port(dev, port);
-		else if (!(BIT(port) & ds->enabled_port_mask))
+		else if (dsa_is_unused_port(ds, port))
 			b53_disable_port(ds, port, NULL);
 	}
 
@@ -1354,7 +1366,7 @@ int b53_br_join(struct dsa_switch *ds, int port, struct net_device *br)
 	b53_read16(dev, B53_PVLAN_PAGE, B53_PVLAN_PORT_MASK(port), &pvlan);
 
 	b53_for_each_port(dev, i) {
-		if (ds->ports[i].bridge_dev != br)
+		if (dsa_to_port(ds, i)->bridge_dev != br)
 			continue;
 
 		/* Add this local port to the remote port VLAN control
@@ -1390,7 +1402,7 @@ void b53_br_leave(struct dsa_switch *ds, int port, struct net_device *br)
 
 	b53_for_each_port(dev, i) {
 		/* Don't touch the remaining ports */
-		if (ds->ports[i].bridge_dev != br)
+		if (dsa_to_port(ds, i)->bridge_dev != br)
 			continue;
 
 		b53_read16(dev, B53_PVLAN_PAGE, B53_PVLAN_PORT_MASK(i), &reg);

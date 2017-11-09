@@ -56,7 +56,6 @@ static bool tb_xdomain_match(const struct tb_cfg_request *req,
 	case TB_CFG_PKG_XDOMAIN_RESP: {
 		const struct tb_xdp_header *res_hdr = pkg->buffer;
 		const struct tb_xdp_header *req_hdr = req->request;
-		u8 req_seq, res_seq;
 
 		if (pkg->frame.size < req->response_size / 4)
 			return false;
@@ -66,14 +65,6 @@ static bool tb_xdomain_match(const struct tb_cfg_request *req,
 		     req_hdr->xd_hdr.route_hi)
 			return false;
 		if ((res_hdr->xd_hdr.route_lo) != req_hdr->xd_hdr.route_lo)
-			return false;
-
-		/* Then check that the sequence number matches */
-		res_seq = res_hdr->xd_hdr.length_sn & TB_XDOMAIN_SN_MASK;
-		res_seq >>= TB_XDOMAIN_SN_SHIFT;
-		req_seq = req_hdr->xd_hdr.length_sn & TB_XDOMAIN_SN_MASK;
-		req_seq >>= TB_XDOMAIN_SN_SHIFT;
-		if (res_seq != req_seq)
 			return false;
 
 		/* Check that the XDomain protocol matches */
@@ -476,7 +467,7 @@ static void tb_xdp_handle_request(struct work_struct *work)
 	struct tb_ctl *ctl = tb->ctl;
 	const uuid_t *uuid;
 	int ret = 0;
-	u8 sequence;
+	u32 sequence;
 	u64 route;
 
 	route = ((u64)xhdr->route_hi << 32 | xhdr->route_lo) & ~BIT_ULL(63);
@@ -1486,6 +1477,9 @@ static bool remove_directory(const char *key, const struct tb_property_dir *dir)
 int tb_register_property_dir(const char *key, struct tb_property_dir *dir)
 {
 	int ret;
+
+	if (WARN_ON(!xdomain_property_dir))
+		return -EAGAIN;
 
 	if (!key || strlen(key) > 8)
 		return -EINVAL;

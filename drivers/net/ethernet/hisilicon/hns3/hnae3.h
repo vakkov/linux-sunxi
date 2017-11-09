@@ -110,6 +110,21 @@ enum hnae3_media_type {
 	HNAE3_MEDIA_TYPE_BACKPLANE,
 };
 
+enum hnae3_reset_notify_type {
+	HNAE3_UP_CLIENT,
+	HNAE3_DOWN_CLIENT,
+	HNAE3_INIT_CLIENT,
+	HNAE3_UNINIT_CLIENT,
+};
+
+enum hnae3_reset_type {
+	HNAE3_FUNC_RESET,
+	HNAE3_CORE_RESET,
+	HNAE3_GLOBAL_RESET,
+	HNAE3_IMP_RESET,
+	HNAE3_NONE_RESET,
+};
+
 struct hnae3_vector_info {
 	u8 __iomem *io_addr;
 	int vector;
@@ -133,6 +148,8 @@ struct hnae3_client_ops {
 	void (*uninit_instance)(struct hnae3_handle *handle, bool reset);
 	void (*link_status_change)(struct hnae3_handle *handle, bool state);
 	int (*setup_tc)(struct hnae3_handle *handle, u8 tc);
+	int (*reset_notify)(struct hnae3_handle *handle,
+			    enum hnae3_reset_notify_type type);
 };
 
 #define HNAE3_CLIENT_NAME_LENGTH 16
@@ -339,6 +356,10 @@ struct hnae3_ae_ops {
 		       u8 *hfunc);
 	int (*set_rss)(struct hnae3_handle *handle, const u32 *indir,
 		       const u8 *key, const u8 hfunc);
+	int (*set_rss_tuple)(struct hnae3_handle *handle,
+			     struct ethtool_rxnfc *cmd);
+	int (*get_rss_tuple)(struct hnae3_handle *handle,
+			     struct ethtool_rxnfc *cmd);
 
 	int (*get_tc_size)(struct hnae3_handle *handle);
 
@@ -363,6 +384,8 @@ struct hnae3_ae_ops {
 			       u16 vlan_id, bool is_kill);
 	int (*set_vf_vlan_filter)(struct hnae3_handle *handle, int vfid,
 				  u16 vlan, u8 qos, __be16 proto);
+	void (*reset_event)(struct hnae3_handle *handle,
+			    enum hnae3_reset_type reset);
 };
 
 struct hnae3_dcb_ops {
@@ -377,6 +400,7 @@ struct hnae3_dcb_ops {
 	u8   (*setdcbx)(struct hnae3_handle *, u8);
 
 	int (*map_update)(struct hnae3_handle *);
+	int (*setup_tc)(struct hnae3_handle *, u8, u8 *);
 };
 
 struct hnae3_ae_algo {

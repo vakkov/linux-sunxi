@@ -42,12 +42,44 @@
 #include <unistd.h>
 #include <linux/limits.h>
 #include <linux/magic.h>
+#include <sys/mount.h>
 #include <sys/types.h>
 #include <sys/vfs.h>
 
 #include <bpf.h>
 
 #include "main.h"
+
+void p_err(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	if (json_output) {
+		jsonw_start_object(json_wtr);
+		jsonw_name(json_wtr, "error");
+		jsonw_vprintf_enquote(json_wtr, fmt, ap);
+		jsonw_end_object(json_wtr);
+	} else {
+		fprintf(stderr, "Error: ");
+		vfprintf(stderr, fmt, ap);
+		fprintf(stderr, "\n");
+	}
+	va_end(ap);
+}
+
+void p_info(const char *fmt, ...)
+{
+	va_list ap;
+
+	if (json_output)
+		return;
+
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	fprintf(stderr, "\n");
+	va_end(ap);
+}
 
 static bool is_bpffs(char *path)
 {
@@ -59,6 +91,37 @@ static bool is_bpffs(char *path)
 	return (unsigned long)st_fs.f_type == BPF_FS_MAGIC;
 }
 
+static int mnt_bpffs(const char *target, char *buff, size_t bufflen)
+{
+	bool bind_done = false;
+
+	while (mount("", target, "none", MS_PRIVATE | MS_REC, NULL)) {
+		if (errno != EINVAL || bind_done) {
+			snprintf(buff, bufflen,
+				 "mount --make-private %s failed: %s",
+				 target, strerror(errno));
+			return -1;
+		}
+
+		if (mount(target, target, "none", MS_BIND, NULL)) {
+			snprintf(buff, bufflen,
+				 "mount --bind %s %s failed: %s",
+				 target, target, strerror(errno));
+			return -1;
+		}
+
+		bind_done = true;
+	}
+
+	if (mount("bpf", target, "bpf", 0, "mode=0700")) {
+		snprintf(buff, bufflen, "mount -t bpf bpf %s failed: %s",
+			 target, strerror(errno));
+		return -1;
+	}
+
+	return 0;
+}
+
 int open_obj_pinned_any(char *path, enum bpf_obj_type exp_type)
 {
 	enum bpf_obj_type type;
@@ -66,8 +129,8 @@ int open_obj_pinned_any(char *path, enum bpf_obj_type exp_type)
 
 	fd = bpf_obj_get(path);
 	if (fd < 0) {
-		err("bpf obj get (%s): %s\n", path,
-		    errno == EACCES && !is_bpffs(dirname(path)) ?
+		p_err("bpf obj get (%s): %s", path,
+		      errno == EACCES && !is_bpffs(dirname(path)) ?
 		    "directory not in bpf file system (bpffs)" :
 		    strerror(errno));
 		return -1;
@@ -79,7 +142,7 @@ int open_obj_pinned_any(char *path, enum bpf_obj_type exp_type)
 		return type;
 	}
 	if (type != exp_type) {
-		err("incorrect object type: %s\n", get_fd_type_name(type));
+		p_err("incorrect object type: %s", get_fd_type_name(type));
 		close(fd);
 		return -1;
 	}
@@ -89,20 +152,23 @@ int open_obj_pinned_any(char *path, enum bpf_obj_type exp_type)
 
 int do_pin_any(int argc, char **argv, int (*get_fd_by_id)(__u32))
 {
+	char err_str[ERR_MAX_LEN];
 	unsigned int id;
 	char *endptr;
+	char *file;
+	char *dir;
 	int err;
 	int fd;
 
 	if (!is_prefix(*argv, "id")) {
-		err("expected 'id' got %s\n", *argv);
+		p_err("expected 'id' got %s", *argv);
 		return -1;
 	}
 	NEXT_ARG();
 
 	id = strtoul(*argv, &endptr, 0);
 	if (*endptr) {
-		err("can't parse %s as ID\n", *argv);
+		p_err("can't parse %s as ID", *argv);
 		return -1;
 	}
 	NEXT_ARG();
@@ -112,21 +178,41 @@ int do_pin_any(int argc, char **argv, int (*get_fd_by_id)(__u32))
 
 	fd = get_fd_by_id(id);
 	if (fd < 0) {
-		err("can't get prog by id (%u): %s\n", id, strerror(errno));
+		p_err("can't get prog by id (%u): %s", id, strerror(errno));
 		return -1;
 	}
 
 	err = bpf_obj_pin(fd, *argv);
-	close(fd);
-	if (err) {
-		err("can't pin the object (%s): %s\n", *argv,
-		    errno == EACCES && !is_bpffs(dirname(*argv)) ?
-		    "directory not in bpf file system (bpffs)" :
-		    strerror(errno));
-		return -1;
+	if (!err)
+		goto out_close;
+
+	file = malloc(strlen(*argv) + 1);
+	strcpy(file, *argv);
+	dir = dirname(file);
+
+	if (errno != EPERM || is_bpffs(dir)) {
+		p_err("can't pin the object (%s): %s", *argv, strerror(errno));
+		goto out_free;
 	}
 
-	return 0;
+	/* Attempt to mount bpffs, then retry pinning. */
+	err = mnt_bpffs(dir, err_str, ERR_MAX_LEN);
+	if (!err) {
+		err = bpf_obj_pin(fd, *argv);
+		if (err)
+			p_err("can't pin the object (%s): %s", *argv,
+			      strerror(errno));
+	} else {
+		err_str[ERR_MAX_LEN - 1] = '\0';
+		p_err("can't mount BPF file system to pin the object (%s): %s",
+		      *argv, err_str);
+	}
+
+out_free:
+	free(file);
+out_close:
+	close(fd);
+	return err;
 }
 
 const char *get_fd_type_name(enum bpf_obj_type type)
@@ -153,11 +239,11 @@ int get_fd_type(int fd)
 
 	n = readlink(path, buf, sizeof(buf));
 	if (n < 0) {
-		err("can't read link type: %s\n", strerror(errno));
+		p_err("can't read link type: %s", strerror(errno));
 		return -1;
 	}
 	if (n == sizeof(path)) {
-		err("can't read link type: path too long!\n");
+		p_err("can't read link type: path too long!");
 		return -1;
 	}
 
@@ -181,7 +267,7 @@ char *get_fdinfo(int fd, const char *key)
 
 	fdi = fopen(path, "r");
 	if (!fdi) {
-		err("can't open fdinfo: %s\n", strerror(errno));
+		p_err("can't open fdinfo: %s", strerror(errno));
 		return NULL;
 	}
 
@@ -196,7 +282,7 @@ char *get_fdinfo(int fd, const char *key)
 
 		value = strchr(line, '\t');
 		if (!value || !value[1]) {
-			err("malformed fdinfo!?\n");
+			p_err("malformed fdinfo!?");
 			free(line);
 			return NULL;
 		}
@@ -209,8 +295,18 @@ char *get_fdinfo(int fd, const char *key)
 		return line;
 	}
 
-	err("key '%s' not found in fdinfo\n", key);
+	p_err("key '%s' not found in fdinfo", key);
 	free(line);
 	fclose(fdi);
 	return NULL;
+}
+
+void print_hex_data_json(uint8_t *data, size_t len)
+{
+	unsigned int i;
+
+	jsonw_start_array(json_wtr);
+	for (i = 0; i < len; i++)
+		jsonw_printf(json_wtr, "\"0x%02hhx\"", data[i]);
+	jsonw_end_array(json_wtr);
 }

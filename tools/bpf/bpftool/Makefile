@@ -46,12 +46,13 @@ $(LIBBPF)-clean:
 	$(Q)$(MAKE) -C $(BPF_DIR) OUTPUT=$(OUTPUT) clean >/dev/null
 
 prefix = /usr
+bash_compdir ?= $(prefix)/share/bash-completion/completions
 
 CC = gcc
 
 CFLAGS += -O2
 CFLAGS += -W -Wall -Wextra -Wno-unused-parameter -Wshadow
-CFLAGS += -D__EXPORTED_HEADERS__ -I$(srctree)/tools/include/uapi -I$(srctree)/tools/include -I$(srctree)/tools/lib/bpf
+CFLAGS += -D__EXPORTED_HEADERS__ -I$(srctree)/tools/include/uapi -I$(srctree)/tools/include -I$(srctree)/tools/lib/bpf -I$(srctree)/kernel/bpf/
 LIBS = -lelf -lbfd -lopcodes $(LIBBPF)
 
 include $(wildcard *.d)
@@ -59,7 +60,10 @@ include $(wildcard *.d)
 all: $(OUTPUT)bpftool
 
 SRCS=$(wildcard *.c)
-OBJS=$(patsubst %.c,$(OUTPUT)%.o,$(SRCS))
+OBJS=$(patsubst %.c,$(OUTPUT)%.o,$(SRCS)) $(OUTPUT)disasm.o
+
+$(OUTPUT)disasm.o: $(srctree)/kernel/bpf/disasm.c
+	$(QUIET_CC)$(COMPILE.c) -MMD -o $@ $<
 
 $(OUTPUT)bpftool: $(OBJS) $(LIBBPF)
 	$(QUIET_LINK)$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
@@ -73,6 +77,8 @@ clean: $(LIBBPF)-clean
 
 install:
 	install $(OUTPUT)bpftool $(prefix)/sbin/bpftool
+	install -m 0755 -d $(bash_compdir)
+	install -m 0644 bash-completion/bpftool $(bash_compdir)
 
 doc:
 	$(Q)$(MAKE) -C Documentation/

@@ -175,6 +175,7 @@ struct tun_file {
 		unsigned int ifindex;
 	};
 	struct napi_struct napi;
+	bool napi_enabled;
 	struct mutex napi_mutex;	/* Protects access to the above napi */
 	struct list_head next;
 	struct tun_struct *detached;
@@ -276,6 +277,7 @@ static int tun_napi_poll(struct napi_struct *napi, int budget)
 static void tun_napi_init(struct tun_struct *tun, struct tun_file *tfile,
 			  bool napi_en)
 {
+	tfile->napi_enabled = napi_en;
 	if (napi_en) {
 		netif_napi_add(tun->dev, &tfile->napi, tun_napi_poll,
 			       NAPI_POLL_WEIGHT);
@@ -286,13 +288,13 @@ static void tun_napi_init(struct tun_struct *tun, struct tun_file *tfile,
 
 static void tun_napi_disable(struct tun_struct *tun, struct tun_file *tfile)
 {
-	if (tun->flags & IFF_NAPI)
+	if (tfile->napi_enabled)
 		napi_disable(&tfile->napi);
 }
 
 static void tun_napi_del(struct tun_struct *tun, struct tun_file *tfile)
 {
-	if (tun->flags & IFF_NAPI)
+	if (tfile->napi_enabled)
 		netif_napi_del(&tfile->napi);
 }
 
@@ -452,25 +454,28 @@ static void tun_flow_cleanup(unsigned long data)
 
 	tun_debug(KERN_INFO, tun, "tun_flow_cleanup\n");
 
-	spin_lock_bh(&tun->lock);
+	spin_lock(&tun->lock);
 	for (i = 0; i < TUN_NUM_FLOW_ENTRIES; i++) {
 		struct tun_flow_entry *e;
 		struct hlist_node *n;
 
 		hlist_for_each_entry_safe(e, n, &tun->flows[i], hash_link) {
 			unsigned long this_timer;
-			count++;
+
 			this_timer = e->updated + delay;
-			if (time_before_eq(this_timer, jiffies))
+			if (time_before_eq(this_timer, jiffies)) {
 				tun_flow_delete(tun, e);
-			else if (time_before(this_timer, next_timer))
+				continue;
+			}
+			count++;
+			if (time_before(this_timer, next_timer))
 				next_timer = this_timer;
 		}
 	}
 
 	if (count)
 		mod_timer(&tun->flow_gc_timer, round_jiffies_up(next_timer));
-	spin_unlock_bh(&tun->lock);
+	spin_unlock(&tun->lock);
 }
 
 static void tun_flow_update(struct tun_struct *tun, u32 rxhash,
@@ -1055,7 +1060,8 @@ static void tun_poll_controller(struct net_device *dev)
 		rcu_read_lock();
 		for (i = 0; i < tun->numqueues; i++) {
 			tfile = rcu_dereference(tun->tfiles[i]);
-			napi_schedule(&tfile->napi);
+			if (tfile->napi_enabled)
+				napi_schedule(&tfile->napi);
 		}
 		rcu_read_unlock();
 	}
@@ -1135,7 +1141,7 @@ static u32 tun_xdp_query(struct net_device *dev)
 	return 0;
 }
 
-static int tun_xdp(struct net_device *dev, struct netdev_xdp *xdp)
+static int tun_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 {
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
@@ -1179,7 +1185,7 @@ static const struct net_device_ops tap_netdev_ops = {
 	.ndo_features_check	= passthru_features_check,
 	.ndo_set_rx_headroom	= tun_set_headroom,
 	.ndo_get_stats64	= tun_net_get_stats64,
-	.ndo_xdp		= tun_xdp,
+	.ndo_bpf		= tun_xdp,
 };
 
 static void tun_flow_init(struct tun_struct *tun)
@@ -1191,8 +1197,6 @@ static void tun_flow_init(struct tun_struct *tun)
 
 	tun->ageing_time = TUN_FLOW_EXPIRE;
 	setup_timer(&tun->flow_gc_timer, tun_flow_cleanup, (unsigned long)tun);
-	mod_timer(&tun->flow_gc_timer,
-		  round_jiffies_up(jiffies + tun->ageing_time));
 }
 
 static void tun_flow_uninit(struct tun_struct *tun)
@@ -1440,6 +1444,7 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 	buflen += SKB_DATA_ALIGN(len + pad);
 	rcu_read_unlock();
 
+	alloc_frag->offset = ALIGN((u64)alloc_frag->offset, SMP_CACHE_BYTES);
 	if (unlikely(!skb_page_frag_refill(buflen, alloc_frag, GFP_KERNEL)))
 		return ERR_PTR(-ENOMEM);
 
@@ -1737,7 +1742,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		/* Exercise flow dissector code path. */
 		u32 headlen = eth_get_headlen(skb->data, skb_headlen(skb));
 
-		if (headlen > skb_headlen(skb) || headlen < ETH_HLEN) {
+		if (unlikely(headlen > skb_headlen(skb))) {
 			this_cpu_inc(tun->pcpu_stats->rx_dropped);
 			napi_free_frags(&tfile->napi);
 			mutex_unlock(&tfile->napi_mutex);
@@ -1749,7 +1754,7 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		napi_gro_frags(&tfile->napi);
 		local_bh_enable();
 		mutex_unlock(&tfile->napi_mutex);
-	} else if (tun->flags & IFF_NAPI) {
+	} else if (tfile->napi_enabled) {
 		struct sk_buff_head *queue = &tfile->sk.sk_write_queue;
 		int queue_len;
 
@@ -2248,6 +2253,9 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 
 		if (!dev)
 			return -ENOMEM;
+		err = dev_get_valid_name(net, dev, name);
+		if (err < 0)
+			goto err_free_dev;
 
 		dev_net_set(dev, net);
 		dev->rtnl_link_ops = &tun_link_ops;
@@ -2644,6 +2652,10 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	case TUNSETSNDBUF:
 		if (copy_from_user(&sndbuf, argp, sizeof(sndbuf))) {
 			ret = -EFAULT;
+			break;
+		}
+		if (sndbuf <= 0) {
+			ret = -EINVAL;
 			break;
 		}
 

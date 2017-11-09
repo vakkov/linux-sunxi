@@ -273,7 +273,7 @@ static void i40e_config_irq_link_list(struct i40e_vf *vf, u16 vsi_id,
 	struct i40e_hw *hw = &pf->hw;
 	u16 vsi_queue_id, pf_queue_id;
 	enum i40e_queue_type qtype;
-	u16 next_q, vector_id;
+	u16 next_q, vector_id, size;
 	u32 reg, reg_idx;
 	u16 itr_idx = 0;
 
@@ -303,9 +303,11 @@ static void i40e_config_irq_link_list(struct i40e_vf *vf, u16 vsi_id,
 				     vsi_queue_id + 1));
 	}
 
-	next_q = find_first_bit(&linklistmap,
-				(I40E_MAX_VSI_QP *
-				 I40E_VIRTCHNL_SUPPORTED_QTYPES));
+	size = I40E_MAX_VSI_QP * I40E_VIRTCHNL_SUPPORTED_QTYPES;
+	next_q = find_first_bit(&linklistmap, size);
+	if (unlikely(next_q == size))
+		goto irq_list_done;
+
 	vsi_queue_id = next_q / I40E_VIRTCHNL_SUPPORTED_QTYPES;
 	qtype = next_q % I40E_VIRTCHNL_SUPPORTED_QTYPES;
 	pf_queue_id = i40e_vc_get_pf_queue_id(vf, vsi_id, vsi_queue_id);
@@ -313,7 +315,7 @@ static void i40e_config_irq_link_list(struct i40e_vf *vf, u16 vsi_id,
 
 	wr32(hw, reg_idx, reg);
 
-	while (next_q < (I40E_MAX_VSI_QP * I40E_VIRTCHNL_SUPPORTED_QTYPES)) {
+	while (next_q < size) {
 		switch (qtype) {
 		case I40E_QUEUE_TYPE_RX:
 			reg_idx = I40E_QINT_RQCTL(pf_queue_id);
@@ -327,12 +329,8 @@ static void i40e_config_irq_link_list(struct i40e_vf *vf, u16 vsi_id,
 			break;
 		}
 
-		next_q = find_next_bit(&linklistmap,
-				       (I40E_MAX_VSI_QP *
-					I40E_VIRTCHNL_SUPPORTED_QTYPES),
-				       next_q + 1);
-		if (next_q <
-		    (I40E_MAX_VSI_QP * I40E_VIRTCHNL_SUPPORTED_QTYPES)) {
+		next_q = find_next_bit(&linklistmap, size, next_q + 1);
+		if (next_q < size) {
 			vsi_queue_id = next_q / I40E_VIRTCHNL_SUPPORTED_QTYPES;
 			qtype = next_q % I40E_VIRTCHNL_SUPPORTED_QTYPES;
 			pf_queue_id = i40e_vc_get_pf_queue_id(vf, vsi_id,
@@ -639,7 +637,7 @@ static int i40e_config_vsi_rx_queue(struct i40e_vf *vf, u16 vsi_id,
 	rx_ctx.dsize = 1;
 
 	/* default values */
-	rx_ctx.lrxqthresh = 2;
+	rx_ctx.lrxqthresh = 1;
 	rx_ctx.crcstrip = 1;
 	rx_ctx.prefena = 1;
 	rx_ctx.l2tsel = 1;
@@ -1358,7 +1356,7 @@ err_alloc:
 		i40e_free_vfs(pf);
 err_iov:
 	/* Re-enable interrupt 0. */
-	i40e_irq_dynamic_enable_icr0(pf, false);
+	i40e_irq_dynamic_enable_icr0(pf);
 	return ret;
 }
 
@@ -1427,8 +1425,7 @@ int i40e_pci_sriov_configure(struct pci_dev *pdev, int num_vfs)
 	if (num_vfs) {
 		if (!(pf->flags & I40E_FLAG_VEB_MODE_ENABLED)) {
 			pf->flags |= I40E_FLAG_VEB_MODE_ENABLED;
-			i40e_do_reset_safe(pf,
-					   BIT_ULL(__I40E_PF_RESET_REQUESTED));
+			i40e_do_reset_safe(pf, I40E_PF_RESET_FLAG);
 		}
 		return i40e_pci_sriov_enable(pdev, num_vfs);
 	}
@@ -1436,7 +1433,7 @@ int i40e_pci_sriov_configure(struct pci_dev *pdev, int num_vfs)
 	if (!pci_vfs_assigned(pf->pdev)) {
 		i40e_free_vfs(pf);
 		pf->flags &= ~I40E_FLAG_VEB_MODE_ENABLED;
-		i40e_do_reset_safe(pf, BIT_ULL(__I40E_PF_RESET_REQUESTED));
+		i40e_do_reset_safe(pf, I40E_PF_RESET_FLAG);
 	} else {
 		dev_warn(&pdev->dev, "Unable to free VFs because some are assigned to VMs.\n");
 		return -EINVAL;
@@ -2048,8 +2045,9 @@ error_param:
  * @msglen: msg length
  *
  * VFs get a default number of queues but can use this message to request a
- * different number.  Will respond with either the number requested or the
- * maximum we can support.
+ * different number.  If the request is successful, PF will reset the VF and
+ * return 0.  If unsuccessful, PF will send message informing VF of number of
+ * available queues and return result of sending VF a message.
  **/
 static int i40e_vc_request_queues_msg(struct i40e_vf *vf, u8 *msg, int msglen)
 {
@@ -2080,7 +2078,11 @@ static int i40e_vc_request_queues_msg(struct i40e_vf *vf, u8 *msg, int msglen)
 			 pf->queues_left);
 		vfres->num_queue_pairs = pf->queues_left + cur_pairs;
 	} else {
+		/* successful request */
 		vf->num_req_queues = req_pairs;
+		i40e_vc_notify_vf_reset(vf);
+		i40e_reset_vf(vf, false);
+		return 0;
 	}
 
 	return i40e_vc_send_msg_to_vf(vf, VIRTCHNL_OP_REQUEST_QUEUES, 0,
@@ -2883,6 +2885,7 @@ int i40e_ndo_set_vf_mac(struct net_device *netdev, int vf_id, u8 *mac)
 	struct i40e_mac_filter *f;
 	struct i40e_vf *vf;
 	int ret = 0;
+	struct hlist_node *h;
 	int bkt;
 
 	/* validate the request */
@@ -2921,7 +2924,7 @@ int i40e_ndo_set_vf_mac(struct net_device *netdev, int vf_id, u8 *mac)
 	/* Delete all the filters for this VSI - we're going to kill it
 	 * anyway.
 	 */
-	hash_for_each(vsi->mac_filter_hash, bkt, f, hlist)
+	hash_for_each_safe(vsi->mac_filter_hash, bkt, h, f, hlist)
 		__i40e_del_filter(vsi, f);
 
 	spin_unlock_bh(&vsi->mac_filter_hash_lock);
@@ -3119,8 +3122,6 @@ error_pvid:
 	return ret;
 }
 
-#define I40E_BW_CREDIT_DIVISOR 50     /* 50Mbps per BW credit */
-#define I40E_MAX_BW_INACTIVE_ACCUM 4  /* device can accumulate 4 credits max */
 /**
  * i40e_ndo_set_vf_bw
  * @netdev: network interface device structure
@@ -3136,7 +3137,6 @@ int i40e_ndo_set_vf_bw(struct net_device *netdev, int vf_id, int min_tx_rate,
 	struct i40e_pf *pf = np->vsi->back;
 	struct i40e_vsi *vsi;
 	struct i40e_vf *vf;
-	int speed = 0;
 	int ret = 0;
 
 	/* validate the request */
@@ -3161,48 +3161,10 @@ int i40e_ndo_set_vf_bw(struct net_device *netdev, int vf_id, int min_tx_rate,
 		goto error;
 	}
 
-	switch (pf->hw.phy.link_info.link_speed) {
-	case I40E_LINK_SPEED_40GB:
-		speed = 40000;
-		break;
-	case I40E_LINK_SPEED_25GB:
-		speed = 25000;
-		break;
-	case I40E_LINK_SPEED_20GB:
-		speed = 20000;
-		break;
-	case I40E_LINK_SPEED_10GB:
-		speed = 10000;
-		break;
-	case I40E_LINK_SPEED_1GB:
-		speed = 1000;
-		break;
-	default:
-		break;
-	}
-
-	if (max_tx_rate > speed) {
-		dev_err(&pf->pdev->dev, "Invalid max tx rate %d specified for VF %d.\n",
-			max_tx_rate, vf->vf_id);
-		ret = -EINVAL;
+	ret = i40e_set_bw_limit(vsi, vsi->seid, max_tx_rate);
+	if (ret)
 		goto error;
-	}
 
-	if ((max_tx_rate < 50) && (max_tx_rate > 0)) {
-		dev_warn(&pf->pdev->dev, "Setting max Tx rate to minimum usable value of 50Mbps.\n");
-		max_tx_rate = 50;
-	}
-
-	/* Tx rate credits are in values of 50Mbps, 0 is disabled*/
-	ret = i40e_aq_config_vsi_bw_limit(&pf->hw, vsi->seid,
-					  max_tx_rate / I40E_BW_CREDIT_DIVISOR,
-					  I40E_MAX_BW_INACTIVE_ACCUM, NULL);
-	if (ret) {
-		dev_err(&pf->pdev->dev, "Unable to set max tx rate, error code %d.\n",
-			ret);
-		ret = -EIO;
-		goto error;
-	}
 	vf->tx_rate = max_tx_rate;
 error:
 	return ret;

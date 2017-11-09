@@ -700,9 +700,9 @@ F:	include/linux/altera_uart.h
 F:	include/linux/altera_jtaguart.h
 
 AMAZON ETHERNET DRIVERS
-M:	Netanel Belgazal <netanel@annapurnalabs.com>
-R:	Saeed Bishara <saeed@annapurnalabs.com>
-R:	Zorik Machulsky <zorik@annapurnalabs.com>
+M:	Netanel Belgazal <netanel@amazon.com>
+R:	Saeed Bishara <saeedb@amazon.com>
+R:	Zorik Machulsky <zorik@amazon.com>
 L:	netdev@vger.kernel.org
 S:	Supported
 F:	Documentation/networking/ena.txt
@@ -2713,6 +2713,7 @@ L:	linux-kernel@vger.kernel.org
 S:	Supported
 F:	arch/x86/net/bpf_jit*
 F:	Documentation/networking/filter.txt
+F:	Documentation/bpf/
 F:	include/linux/bpf*
 F:	include/linux/filter.h
 F:	include/uapi/linux/bpf*
@@ -2897,6 +2898,7 @@ F:	drivers/gpio/gpio-brcmstb.c
 F:	Documentation/devicetree/bindings/gpio/brcm,brcmstb-gpio.txt
 
 BROADCOM GENET ETHERNET DRIVER
+M:	Doug Berger <opendmb@gmail.com>
 M:	Florian Fainelli <f.fainelli@gmail.com>
 L:	netdev@vger.kernel.org
 S:	Supported
@@ -3329,17 +3331,22 @@ S:	Maintained
 F:	drivers/auxdisplay/cfag12864bfb.c
 F:	include/linux/cfag12864b.h
 
-CFG80211 and NL80211
+802.11 (including CFG80211/NL80211)
 M:	Johannes Berg <johannes@sipsolutions.net>
 L:	linux-wireless@vger.kernel.org
 W:	http://wireless.kernel.org/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/jberg/mac80211.git
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/jberg/mac80211-next.git
 S:	Maintained
+F:	net/wireless/
 F:	include/uapi/linux/nl80211.h
+F:	include/linux/ieee80211.h
+F:	include/net/wext.h
 F:	include/net/cfg80211.h
-F:	net/wireless/*
-X:	net/wireless/wext*
+F:	include/net/iw_handler.h
+F:	include/net/ieee80211_radiotap.h
+F:	Documentation/driver-api/80211/cfg80211.rst
+F:	Documentation/networking/regulatory.txt
 
 CHAR and MISC DRIVERS
 M:	Arnd Bergmann <arnd@arndb.de>
@@ -3415,7 +3422,7 @@ F:	drivers/scsi/snic/
 CISCO VIC ETHERNET NIC DRIVER
 M:	Christian Benvenuti <benve@cisco.com>
 M:	Govindarajulu Varadarajan <_govind@gmx.com>
-M:	Neel Patel <neepatel@cisco.com>
+M:	Parvi Kaustubhi <pkaustub@cisco.com>
 S:	Supported
 F:	drivers/net/ethernet/cisco/enic/
 
@@ -5265,7 +5272,8 @@ S:	Maintained
 F:	drivers/iommu/exynos-iommu.c
 
 EZchip NPS platform support
-M:	Noam Camus <noamc@ezchip.com>
+M:	Elad Kanfi <eladkan@mellanox.com>
+M:	Vineet Gupta <vgupta@synopsys.com>
 S:	Supported
 F:	arch/arc/plat-eznps
 F:	arch/arc/boot/dts/eznps.dts
@@ -5351,9 +5359,7 @@ M:	"J. Bruce Fields" <bfields@fieldses.org>
 L:	linux-fsdevel@vger.kernel.org
 S:	Maintained
 F:	include/linux/fcntl.h
-F:	include/linux/fs.h
 F:	include/uapi/linux/fcntl.h
-F:	include/uapi/linux/fs.h
 F:	fs/fcntl.c
 F:	fs/locks.c
 
@@ -5362,6 +5368,8 @@ M:	Alexander Viro <viro@zeniv.linux.org.uk>
 L:	linux-fsdevel@vger.kernel.org
 S:	Maintained
 F:	fs/*
+F:	include/linux/fs.h
+F:	include/uapi/linux/fs.h
 
 FINTEK F75375S HARDWARE MONITOR AND FAN CONTROLLER DRIVER
 M:	Riku Voipio <riku.voipio@iki.fi>
@@ -6677,7 +6685,7 @@ F:	include/net/ieee802154_netdev.h
 F:	Documentation/networking/ieee802154.txt
 
 IFE PROTOCOL
-M:	Yotam Gigi <yotamg@mellanox.com>
+M:	Yotam Gigi <yotam.gi@gmail.com>
 M:	Jamal Hadi Salim <jhs@mojatatu.com>
 F:	net/ife
 F:	include/net/ife.h
@@ -6739,7 +6747,7 @@ S:	Maintained
 F:	drivers/usb/atm/ueagle-atm.c
 
 IMGTEC ASCII LCD DRIVER
-M:	Paul Burton <paul.burton@imgtec.com>
+M:	Paul Burton <paul.burton@mips.com>
 S:	Maintained
 F:	Documentation/devicetree/bindings/auxdisplay/img-ascii-lcd.txt
 F:	drivers/auxdisplay/img-ascii-lcd.c
@@ -7577,7 +7585,7 @@ F:	arch/mips/include/asm/kvm*
 F:	arch/mips/kvm/
 
 KERNEL VIRTUAL MACHINE FOR POWERPC (KVM/powerpc)
-M:	Alexander Graf <agraf@suse.com>
+M:	Paul Mackerras <paulus@ozlabs.org>
 L:	kvm-ppc@vger.kernel.org
 W:	http://www.linux-kvm.org/
 T:	git git://github.com/agraf/linux-2.6.git
@@ -8214,6 +8222,7 @@ F:	Documentation/networking/mac80211-injection.txt
 F:	include/net/mac80211.h
 F:	net/mac80211/
 F:	drivers/net/wireless/mac80211_hwsim.[ch]
+F:	Documentation/networking/mac80211_hwsim/README
 
 MAILBOX API
 M:	Jassi Brar <jassisinghbrar@gmail.com>
@@ -8749,7 +8758,7 @@ Q:	http://patchwork.ozlabs.org/project/netdev/list/
 F:	drivers/net/ethernet/mellanox/mlxsw/
 
 MELLANOX FIRMWARE FLASH LIBRARY (mlxfw)
-M:	Yotam Gigi <yotamg@mellanox.com>
+M:	mlxsw@mellanox.com
 L:	netdev@vger.kernel.org
 S:	Supported
 W:	http://www.mellanox.com
@@ -8999,7 +9008,7 @@ F:	Documentation/mips/
 F:	arch/mips/
 
 MIPS BOSTON DEVELOPMENT BOARD
-M:	Paul Burton <paul.burton@imgtec.com>
+M:	Paul Burton <paul.burton@mips.com>
 L:	linux-mips@linux-mips.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/clock/img,boston-clock.txt
@@ -9009,7 +9018,7 @@ F:	drivers/clk/imgtec/clk-boston.c
 F:	include/dt-bindings/clock/boston-clock.h
 
 MIPS GENERIC PLATFORM
-M:	Paul Burton <paul.burton@imgtec.com>
+M:	Paul Burton <paul.burton@mips.com>
 L:	linux-mips@linux-mips.org
 S:	Supported
 F:	arch/mips/generic/
@@ -9219,7 +9228,6 @@ F:	include/linux/isicom.h
 MUSB MULTIPOINT HIGH SPEED DUAL-ROLE CONTROLLER
 M:	Bin Liu <b-liu@ti.com>
 L:	linux-usb@vger.kernel.org
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/balbi/usb.git
 S:	Maintained
 F:	drivers/usb/musb/
 
@@ -9367,7 +9375,7 @@ NETWORK BLOCK DEVICE (NBD)
 M:	Josef Bacik <jbacik@fb.com>
 S:	Maintained
 L:	linux-block@vger.kernel.org
-L:	nbd-general@lists.sourceforge.net
+L:	nbd@other.debian.org
 F:	Documentation/blockdev/nbd.txt
 F:	drivers/block/nbd.c
 F:	include/uapi/linux/nbd.h
@@ -9415,6 +9423,7 @@ M:	Florian Fainelli <f.fainelli@gmail.com>
 S:	Maintained
 F:	net/dsa/
 F:	include/net/dsa.h
+F:	include/linux/dsa/
 F:	drivers/net/dsa/
 
 NETWORKING [GENERAL]
@@ -9436,6 +9445,7 @@ F:	include/uapi/linux/net.h
 F:	include/uapi/linux/netdevice.h
 F:	include/uapi/linux/net_namespace.h
 F:	tools/testing/selftests/net/
+F:	lib/net_utils.c
 F:	lib/random32.c
 
 NETWORKING [IPSEC]
@@ -10185,7 +10195,6 @@ F:	Documentation/parport*.txt
 
 PARAVIRT_OPS INTERFACE
 M:	Juergen Gross <jgross@suse.com>
-M:	Chris Wright <chrisw@sous-sol.org>
 M:	Alok Kataria <akataria@vmware.com>
 M:	Rusty Russell <rusty@rustcorp.com.au>
 L:	virtualization@lists.linux-foundation.org
@@ -10565,6 +10574,8 @@ M:	Peter Zijlstra <peterz@infradead.org>
 M:	Ingo Molnar <mingo@redhat.com>
 M:	Arnaldo Carvalho de Melo <acme@kernel.org>
 R:	Alexander Shishkin <alexander.shishkin@linux.intel.com>
+R:	Jiri Olsa <jolsa@redhat.com>
+R:	Namhyung Kim <namhyung@kernel.org>
 L:	linux-kernel@vger.kernel.org
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git perf/core
 S:	Supported
@@ -10895,7 +10906,7 @@ S:	Maintained
 F:	drivers/block/ps3vram.c
 
 PSAMPLE PACKET SAMPLING SUPPORT:
-M:	Yotam Gigi <yotamg@mellanox.com>
+M:	Yotam Gigi <yotam.gi@gmail.com>
 S:	Maintained
 F:	net/psample
 F:	include/net/psample.h
@@ -11498,6 +11509,7 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/jberg/mac80211.git
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/jberg/mac80211-next.git
 S:	Maintained
 F:	Documentation/rfkill.txt
+F:	Documentation/ABI/stable/sysfs-class-rfkill
 F:	net/rfkill/
 
 RHASHTABLE
@@ -14564,7 +14576,6 @@ L:	wil6210@qca.qualcomm.com
 S:	Supported
 W:	http://wireless.kernel.org/en/users/Drivers/wil6210
 F:	drivers/net/wireless/ath/wil6210/
-F:	include/uapi/linux/wil6210_uapi.h
 
 WIMAX STACK
 M:	Inaky Perez-Gonzalez <inaky.perez-gonzalez@intel.com>

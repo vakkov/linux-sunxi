@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_INETDEVICE_H
 #define _LINUX_INETDEVICE_H
 
@@ -154,6 +155,7 @@ struct in_ifaddr {
 struct in_validator_info {
 	__be32			ivi_addr;
 	struct in_device	*ivi_dev;
+	struct netlink_ext_ack	*extack;
 };
 
 int register_inetaddr_notifier(struct notifier_block *nb);

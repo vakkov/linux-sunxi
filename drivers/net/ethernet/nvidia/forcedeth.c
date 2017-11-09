@@ -1024,12 +1024,18 @@ static void free_rings(struct net_device *dev)
 
 	if (!nv_optimized(np)) {
 		if (np->rx_ring.orig)
-			pci_free_consistent(np->pci_dev, sizeof(struct ring_desc) * (np->rx_ring_size + np->tx_ring_size),
-					    np->rx_ring.orig, np->ring_addr);
+			dma_free_coherent(&np->pci_dev->dev,
+					  sizeof(struct ring_desc) *
+					  (np->rx_ring_size +
+					  np->tx_ring_size),
+					  np->rx_ring.orig, np->ring_addr);
 	} else {
 		if (np->rx_ring.ex)
-			pci_free_consistent(np->pci_dev, sizeof(struct ring_desc_ex) * (np->rx_ring_size + np->tx_ring_size),
-					    np->rx_ring.ex, np->ring_addr);
+			dma_free_coherent(&np->pci_dev->dev,
+					  sizeof(struct ring_desc_ex) *
+					  (np->rx_ring_size +
+					  np->tx_ring_size),
+					  np->rx_ring.ex, np->ring_addr);
 	}
 	kfree(np->rx_skb);
 	kfree(np->tx_skb);
@@ -1884,10 +1890,9 @@ packet_dropped:
 }
 
 /* If rx bufs are exhausted called after 50ms to attempt to refresh */
-static void nv_do_rx_refill(unsigned long data)
+static void nv_do_rx_refill(struct timer_list *t)
 {
-	struct net_device *dev = (struct net_device *) data;
-	struct fe_priv *np = netdev_priv(dev);
+	struct fe_priv *np = from_timer(np, t, oom_kick);
 
 	/* Just reschedule NAPI rx processing */
 	napi_schedule(&np->napi);
@@ -4065,10 +4070,10 @@ static void nv_free_irq(struct net_device *dev)
 	}
 }
 
-static void nv_do_nic_poll(unsigned long data)
+static void nv_do_nic_poll(struct timer_list *t)
 {
-	struct net_device *dev = (struct net_device *) data;
-	struct fe_priv *np = netdev_priv(dev);
+	struct fe_priv *np = from_timer(np, t, nic_poll);
+	struct net_device *dev = np->dev;
 	u8 __iomem *base = get_hwbase(dev);
 	u32 mask = 0;
 	unsigned long flags;
@@ -4176,16 +4181,18 @@ static void nv_do_nic_poll(unsigned long data)
 #ifdef CONFIG_NET_POLL_CONTROLLER
 static void nv_poll_controller(struct net_device *dev)
 {
-	nv_do_nic_poll((unsigned long) dev);
+	struct fe_priv *np = netdev_priv(dev);
+
+	nv_do_nic_poll(&np->nic_poll);
 }
 #endif
 
-static void nv_do_stats_poll(unsigned long data)
+static void nv_do_stats_poll(struct timer_list *t)
 	__acquires(&netdev_priv(dev)->hwstats_lock)
 	__releases(&netdev_priv(dev)->hwstats_lock)
 {
-	struct net_device *dev = (struct net_device *) data;
-	struct fe_priv *np = netdev_priv(dev);
+	struct fe_priv *np = from_timer(np, t, stats_poll);
+	struct net_device *dev = np->dev;
 
 	/* If lock is currently taken, the stats are being refreshed
 	 * and hence fresh enough */
@@ -4595,13 +4602,17 @@ static int nv_set_ringparam(struct net_device *dev, struct ethtool_ringparam* ri
 
 	/* allocate new rings */
 	if (!nv_optimized(np)) {
-		rxtx_ring = pci_alloc_consistent(np->pci_dev,
-					    sizeof(struct ring_desc) * (ring->rx_pending + ring->tx_pending),
-					    &ring_addr);
+		rxtx_ring = dma_alloc_coherent(&np->pci_dev->dev,
+					       sizeof(struct ring_desc) *
+					       (ring->rx_pending +
+					       ring->tx_pending),
+					       &ring_addr, GFP_ATOMIC);
 	} else {
-		rxtx_ring = pci_alloc_consistent(np->pci_dev,
-					    sizeof(struct ring_desc_ex) * (ring->rx_pending + ring->tx_pending),
-					    &ring_addr);
+		rxtx_ring = dma_alloc_coherent(&np->pci_dev->dev,
+					       sizeof(struct ring_desc_ex) *
+					       (ring->rx_pending +
+					       ring->tx_pending),
+					       &ring_addr, GFP_ATOMIC);
 	}
 	rx_skbuff = kmalloc(sizeof(struct nv_skb_map) * ring->rx_pending, GFP_KERNEL);
 	tx_skbuff = kmalloc(sizeof(struct nv_skb_map) * ring->tx_pending, GFP_KERNEL);
@@ -4609,12 +4620,18 @@ static int nv_set_ringparam(struct net_device *dev, struct ethtool_ringparam* ri
 		/* fall back to old rings */
 		if (!nv_optimized(np)) {
 			if (rxtx_ring)
-				pci_free_consistent(np->pci_dev, sizeof(struct ring_desc) * (ring->rx_pending + ring->tx_pending),
-						    rxtx_ring, ring_addr);
+				dma_free_coherent(&np->pci_dev->dev,
+						  sizeof(struct ring_desc) *
+						  (ring->rx_pending +
+						  ring->tx_pending),
+						  rxtx_ring, ring_addr);
 		} else {
 			if (rxtx_ring)
-				pci_free_consistent(np->pci_dev, sizeof(struct ring_desc_ex) * (ring->rx_pending + ring->tx_pending),
-						    rxtx_ring, ring_addr);
+				dma_free_coherent(&np->pci_dev->dev,
+						  sizeof(struct ring_desc_ex) *
+						  (ring->rx_pending +
+						  ring->tx_pending),
+						  rxtx_ring, ring_addr);
 		}
 
 		kfree(rx_skbuff);
@@ -5631,10 +5648,9 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	u64_stats_init(&np->swstats_rx_syncp);
 	u64_stats_init(&np->swstats_tx_syncp);
 
-	setup_timer(&np->oom_kick, nv_do_rx_refill, (unsigned long)dev);
-	setup_timer(&np->nic_poll, nv_do_nic_poll, (unsigned long)dev);
-	setup_deferrable_timer(&np->stats_poll, nv_do_stats_poll,
-			       (unsigned long)dev);
+	timer_setup(&np->oom_kick, nv_do_rx_refill, 0);
+	timer_setup(&np->nic_poll, nv_do_nic_poll, 0);
+	timer_setup(&np->stats_poll, nv_do_stats_poll, TIMER_DEFERRABLE);
 
 	err = pci_enable_device(pci_dev);
 	if (err)
@@ -5740,16 +5756,21 @@ static int nv_probe(struct pci_dev *pci_dev, const struct pci_device_id *id)
 	np->tx_ring_size = TX_RING_DEFAULT;
 
 	if (!nv_optimized(np)) {
-		np->rx_ring.orig = pci_alloc_consistent(pci_dev,
-					sizeof(struct ring_desc) * (np->rx_ring_size + np->tx_ring_size),
-					&np->ring_addr);
+		np->rx_ring.orig = dma_alloc_coherent(&pci_dev->dev,
+						      sizeof(struct ring_desc) *
+						      (np->rx_ring_size +
+						      np->tx_ring_size),
+						      &np->ring_addr,
+						      GFP_ATOMIC);
 		if (!np->rx_ring.orig)
 			goto out_unmap;
 		np->tx_ring.orig = &np->rx_ring.orig[np->rx_ring_size];
 	} else {
-		np->rx_ring.ex = pci_alloc_consistent(pci_dev,
-					sizeof(struct ring_desc_ex) * (np->rx_ring_size + np->tx_ring_size),
-					&np->ring_addr);
+		np->rx_ring.ex = dma_alloc_coherent(&pci_dev->dev,
+						    sizeof(struct ring_desc_ex) *
+						    (np->rx_ring_size +
+						    np->tx_ring_size),
+						    &np->ring_addr, GFP_ATOMIC);
 		if (!np->rx_ring.ex)
 			goto out_unmap;
 		np->tx_ring.ex = &np->rx_ring.ex[np->rx_ring_size];

@@ -475,6 +475,7 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 		}
 		spin_unlock_bh(&queue->fastopenq.lock);
 	}
+	mem_cgroup_sk_alloc(newsk);
 out:
 	release_sock(sk);
 	if (req)
@@ -494,17 +495,15 @@ EXPORT_SYMBOL(inet_csk_accept);
  * to optimize.
  */
 void inet_csk_init_xmit_timers(struct sock *sk,
-			       void (*retransmit_handler)(unsigned long),
-			       void (*delack_handler)(unsigned long),
-			       void (*keepalive_handler)(unsigned long))
+			       void (*retransmit_handler)(struct timer_list *t),
+			       void (*delack_handler)(struct timer_list *t),
+			       void (*keepalive_handler)(struct timer_list *t))
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
-	setup_timer(&icsk->icsk_retransmit_timer, retransmit_handler,
-			(unsigned long)sk);
-	setup_timer(&icsk->icsk_delack_timer, delack_handler,
-			(unsigned long)sk);
-	setup_timer(&sk->sk_timer, keepalive_handler, (unsigned long)sk);
+	timer_setup(&icsk->icsk_retransmit_timer, retransmit_handler, 0);
+	timer_setup(&icsk->icsk_delack_timer, delack_handler, 0);
+	timer_setup(&sk->sk_timer, keepalive_handler, 0);
 	icsk->icsk_pending = icsk->icsk_ack.pending = 0;
 }
 EXPORT_SYMBOL(inet_csk_init_xmit_timers);
@@ -539,8 +538,10 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 {
 	const struct inet_request_sock *ireq = inet_rsk(req);
 	struct net *net = read_pnet(&ireq->ireq_net);
-	struct ip_options_rcu *opt = ireq->opt;
+	struct ip_options_rcu *opt;
 	struct rtable *rt;
+
+	opt = ireq_opt_deref(ireq);
 
 	flowi4_init_output(fl4, ireq->ir_iif, ireq->ir_mark,
 			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE,
@@ -575,10 +576,9 @@ struct dst_entry *inet_csk_route_child_sock(const struct sock *sk,
 	struct flowi4 *fl4;
 	struct rtable *rt;
 
+	opt = rcu_dereference(ireq->ireq_opt);
 	fl4 = &newinet->cork.fl.u.ip4;
 
-	rcu_read_lock();
-	opt = rcu_dereference(newinet->inet_opt);
 	flowi4_init_output(fl4, ireq->ir_iif, ireq->ir_mark,
 			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE,
 			   sk->sk_protocol, inet_sk_flowi_flags(sk),
@@ -591,13 +591,11 @@ struct dst_entry *inet_csk_route_child_sock(const struct sock *sk,
 		goto no_route;
 	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto route_err;
-	rcu_read_unlock();
 	return &rt->dst;
 
 route_err:
 	ip_rt_put(rt);
 no_route:
-	rcu_read_unlock();
 	__IP_INC_STATS(net, IPSTATS_MIB_OUTNOROUTES);
 	return NULL;
 }
@@ -676,9 +674,9 @@ void inet_csk_reqsk_queue_drop_and_put(struct sock *sk, struct request_sock *req
 }
 EXPORT_SYMBOL(inet_csk_reqsk_queue_drop_and_put);
 
-static void reqsk_timer_handler(unsigned long data)
+static void reqsk_timer_handler(struct timer_list *t)
 {
-	struct request_sock *req = (struct request_sock *)data;
+	struct request_sock *req = from_timer(req, t, rsk_timer);
 	struct sock *sk_listener = req->rsk_listener;
 	struct net *net = sock_net(sk_listener);
 	struct inet_connection_sock *icsk = inet_csk(sk_listener);
@@ -749,8 +747,7 @@ static void reqsk_queue_hash_req(struct request_sock *req,
 	req->num_timeout = 0;
 	req->sk = NULL;
 
-	setup_pinned_timer(&req->rsk_timer, reqsk_timer_handler,
-			    (unsigned long)req);
+	timer_setup(&req->rsk_timer, reqsk_timer_handler, TIMER_PINNED);
 	mod_timer(&req->rsk_timer, jiffies + timeout);
 
 	inet_ehash_insert(req_to_sk(req), NULL);

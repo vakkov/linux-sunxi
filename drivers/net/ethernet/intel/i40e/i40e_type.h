@@ -46,6 +46,9 @@
 /* Max default timeout in ms, */
 #define I40E_MAX_NVM_TIMEOUT		18000
 
+/* Max timeout in ms for the phy to respond */
+#define I40E_MAX_PHY_TIMEOUT		500
+
 /* Switch from ms to the 1usec global time (this is the GTIME resolution) */
 #define I40E_MS_TO_GTIME(time)		((time) * 1000)
 
@@ -268,6 +271,10 @@ struct i40e_phy_info {
 					     I40E_PHY_TYPE_OFFSET)
 #define I40E_CAP_PHY_TYPE_25GBASE_LR BIT_ULL(I40E_PHY_TYPE_25GBASE_LR + \
 					     I40E_PHY_TYPE_OFFSET)
+#define I40E_CAP_PHY_TYPE_25GBASE_AOC BIT_ULL(I40E_PHY_TYPE_25GBASE_AOC + \
+					     I40E_PHY_TYPE_OFFSET)
+#define I40E_CAP_PHY_TYPE_25GBASE_ACC BIT_ULL(I40E_PHY_TYPE_25GBASE_ACC + \
+					     I40E_PHY_TYPE_OFFSET)
 #define I40E_HW_CAP_MAX_GPIO			30
 /* Capabilities of a PF or a VF or the whole device */
 struct i40e_hw_capabilities {
@@ -275,6 +282,16 @@ struct i40e_hw_capabilities {
 #define I40E_NVM_IMAGE_TYPE_EVB		0x0
 #define I40E_NVM_IMAGE_TYPE_CLOUD	0x2
 #define I40E_NVM_IMAGE_TYPE_UDP_CLOUD	0x3
+
+	/* Cloud filter modes:
+	 * Mode1: Filter on L4 port only
+	 * Mode2: Filter for non-tunneled traffic
+	 * Mode3: Filter for tunnel traffic
+	 */
+#define I40E_CLOUD_FILTER_MODE1	0x6
+#define I40E_CLOUD_FILTER_MODE2	0x7
+#define I40E_CLOUD_FILTER_MODE3	0x8
+#define I40E_SWITCH_MODE_MASK	0xF
 
 	u32  management_mode;
 	u32  mng_protocols_over_mctp;
